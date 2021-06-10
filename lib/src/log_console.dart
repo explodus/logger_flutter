@@ -1,27 +1,44 @@
 part of logger_flutter;
 
 ListQueue<OutputEvent> _outputEventBuffer = ListQueue();
-int _bufferSize = 20;
-bool _initialized = false;
+MemoryOutput? _output;
 
 class LogConsole extends StatefulWidget {
   final bool dark;
   final bool showCloseButton;
+  final MemoryOutput? output;
 
-  LogConsole({this.dark = false, this.showCloseButton = false})
-      : assert(_initialized, "Please call LogConsole.init() first.");
+  LogConsole({this.dark = false, this.showCloseButton = false, this.output});
 
-  static void init({int bufferSize = 20}) {
-    if (_initialized) return;
+  static Future<void> open(BuildContext context, {required bool dark, MemoryOutput? thisOutput}) async {
+    var logConsole = LogConsole(
+      showCloseButton: true,
+      dark: dark,
+      output: thisOutput,
+    );
+    _output = thisOutput;
+    PageRoute route;
+    if (Platform.isIOS) {
+      route = CupertinoPageRoute(builder: (_) => logConsole);
+    } else {
+      route = MaterialPageRoute(builder: (_) => logConsole);
+    }
 
-    _bufferSize = bufferSize;
-    _initialized = true;
-    Logger.addOutputListener((e) {
-      if (_outputEventBuffer.length == bufferSize) {
+    await Navigator.push(context, route);
+  }
+
+  static void add(OutputEvent outputEvent, {int bufferSize = 20}) {
+    if (_output != null) {
+      while (_output!.buffer.length >= (_output!.bufferSize)) {
+        _output!.buffer.removeFirst();
+      }
+      _output!.buffer.add(outputEvent);
+    } else {
+      while (_outputEventBuffer.length >= (bufferSize)) {
         _outputEventBuffer.removeFirst();
       }
-      _outputEventBuffer.add(e);
-    });
+      _outputEventBuffer.add(outputEvent);
+    }
   }
 
   @override
@@ -38,15 +55,13 @@ class RenderedEvent {
 }
 
 class _LogConsoleState extends State<LogConsole> {
-  OutputCallback? _callback;
-
   ListQueue<RenderedEvent> _renderedBuffer = ListQueue();
   List<RenderedEvent> _filteredBuffer = [];
 
   var _scrollController = ScrollController();
   var _filterController = TextEditingController();
 
-  Level? _filterLevel = Level.verbose;
+  Level _filterLevel = Level.verbose;
   double _logFontSize = 14;
 
   var _currentId = 0;
@@ -57,21 +72,9 @@ class _LogConsoleState extends State<LogConsole> {
   void initState() {
     super.initState();
 
-    _callback = (e) {
-      if (_renderedBuffer.length == _bufferSize) {
-        _renderedBuffer.removeFirst();
-      }
-
-      _renderedBuffer.add(_renderEvent(e));
-      _refreshFilter();
-    };
-
-    Logger.addOutputListener(_callback);
-
     _scrollController.addListener(() {
       if (!_scrollListenerEnabled) return;
-      var scrolledToBottom = _scrollController.offset >=
-          _scrollController.position.maxScrollExtent;
+      var scrolledToBottom = _scrollController.offset >= _scrollController.position.maxScrollExtent;
       setState(() {
         _followBottom = scrolledToBottom;
       });
@@ -83,15 +86,21 @@ class _LogConsoleState extends State<LogConsole> {
     super.didChangeDependencies();
 
     _renderedBuffer.clear();
-    for (var event in _outputEventBuffer) {
-      _renderedBuffer.add(_renderEvent(event));
+    if (widget.output != null) {
+      for (var event in widget.output!.buffer) {
+        _renderedBuffer.add(_renderEvent(event));
+      }
+    } else {
+      for (var event in _outputEventBuffer) {
+        _renderedBuffer.add(_renderEvent(event));
+      }
     }
     _refreshFilter();
   }
 
   void _refreshFilter() {
     var newFilteredBuffer = _renderedBuffer.where((it) {
-      var logLevelMatches = it.level.index >= _filterLevel!.index;
+      var logLevelMatches = it.level.index >= _filterLevel.index;
       if (!logLevelMatches) {
         return false;
       } else if (_filterController.text.isNotEmpty) {
@@ -269,8 +278,8 @@ class _LogConsoleState extends State<LogConsole> {
                 value: Level.wtf,
               )
             ],
-            onChanged: (dynamic value) {
-              _filterLevel = value;
+            onChanged: (value) {
+              _filterLevel = value as Level;
               _refreshFilter();
             },
           )
@@ -307,19 +316,13 @@ class _LogConsoleState extends State<LogConsole> {
       text.toLowerCase(),
     );
   }
-
-  @override
-  void dispose() {
-    Logger.removeOutputListener(_callback);
-    super.dispose();
-  }
 }
 
 class LogBar extends StatelessWidget {
-  final bool? dark;
-  final Widget? child;
+  final bool dark;
+  final Widget child;
 
-  LogBar({this.dark, this.child});
+  LogBar({required this.dark, required this.child});
 
   @override
   Widget build(BuildContext context) {
@@ -328,15 +331,15 @@ class LogBar extends StatelessWidget {
       child: Container(
         decoration: BoxDecoration(
           boxShadow: [
-            if (!dark!)
+            if (!dark)
               BoxShadow(
-                color: Colors.grey[400]!,
+                color: Colors.grey,
                 blurRadius: 3,
               ),
           ],
         ),
         child: Material(
-          color: dark! ? Colors.blueGrey[900] : Colors.white,
+          color: dark ? Colors.blueGrey[900] : Colors.white,
           child: Padding(
             padding: EdgeInsets.fromLTRB(15, 8, 15, 8),
             child: child,
